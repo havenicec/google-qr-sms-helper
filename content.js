@@ -101,14 +101,20 @@
         return;
       }
 
-      statusEl.textContent = "✅ [3,null,4] 注入成功！正在跳转短信选择框...";
+      statusEl.textContent = "✅ [3,null,4] 注入成功！正在跳转短信验证页...";
       const params = new URLSearchParams(location.search);
-      let cont = params.get("continue");
-      if (!cont) throw new Error("当前网址没有 continue 参数，请从 Cloud Shell Verify 进入");
+      let cont = params.get("continue") || "";
+      let targetUrl = "";
 
-      cont = cont.replace(/&idv_xdevice=[^&]*/g, "");
-      cont = cont.replace(/([?&])authuser(&|$)/, "$1authuser=0$2");
-      const targetUrl = cont + "&idv_xdevice=1";
+      if (cont && cont.startsWith("https://accounts.google.com/uplevelingstep/")) {
+        cont = cont.replace(/&idv_xdevice=[^&]*/g, "");
+        cont = cont.replace(/([?&])authuser(&|$)/, "$1authuser=0$2");
+        targetUrl = cont + "&idv_xdevice=1";
+      } else {
+        // 普通登录入口：去掉 /qrcode，保留并清洗当前参数后追加 &idv_xdevice=1
+        targetUrl = location.href.replace("/challenge/iap/qrcode", "/challenge/iap");
+        targetUrl = targetUrl.replace(/&idv_xdevice=[^&]*/g, "") + "&idv_xdevice=1";
+      }
       location.replace(targetUrl);
     } catch (e) {
       statusEl.textContent = "❌ " + e.message;
