@@ -86,13 +86,19 @@ async function handleDowngrade(qrUrl) {
 
   const atMatch = html.match(/"SNlM0e":"([^"]+)"/);
   const dshMatch = html.match(/"Qzxixc":"([^"]+)"/);
-  const tlMatch = html.match(/ADG-[A-Za-z0-9_-]+/);
-  if (!atMatch || !dshMatch || !tlMatch) {
+  let tl = "";
+  const ds0Match = html.match(/key:\s*['"]ds:0['"][^\}]*data:\["([^"]+)"\]/);
+  if (ds0Match) {
+    tl = ds0Match[1];
+  } else {
+    const tlMatch = html.match(/ADG-[A-Za-z0-9_-]+/);
+    if (tlMatch) tl = tlMatch[0];
+  }
+  if (!atMatch || !dshMatch || !tl) {
     throw new Error("未能从二维码页面提取出 SNlM0e / Qzxixc / TL 参数");
   }
   const at = atMatch[1];
   const dsh = dshMatch[1];
-  const tl = tlMatch[0];
 
   async function callRpc(rpcid, payload, sourcePath) {
     const url = `https://accounts.google.com/devicephoneverification/_/DevicePhoneVerificationUi/data/batchexecute?rpcids=${rpcid}&source-path=${sourcePath}&hl=en&tl=${encodeURIComponent(tl)}&rt=c`;
