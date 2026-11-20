@@ -2,7 +2,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Manifest-V3-1a73e8?style=flat-square&logo=googlechrome&logoColor=white" alt="Manifest V3" />
-  <img src="https://img.shields.io/badge/Version-1.1.0-34a853?style=flat-square" alt="Version 1.1.0" />
+  <img src="https://img.shields.io/badge/Version-1.2.0-34a853?style=flat-square" alt="Version 1.2.0" />
   <img src="https://img.shields.io/badge/License-MIT-fbbc04?style=flat-square" alt="MIT License" />
   <img src="https://img.shields.io/badge/Platform-Chrome%20%7C%20Edge%20%7C%20Brave-ea4335?style=flat-square" alt="Platform" />
 </p>
@@ -17,7 +17,7 @@
 ## 📦 一、安装教程 (Installation)
 
 ### 方式 1：直接下载 Release 压缩包（推荐新手）
-1. 前往本仓库的 **[Releases 页面](https://github.com/havenicec/google-qr-sms-helper/releases/latest)**，下载最新的 `google-qr-sms-helper-v1.1.0.zip` 并解压到本地文件夹。
+1. 前往本仓库的 **[Releases 页面](https://github.com/havenicec/google-qr-sms-helper/releases/latest)**，下载最新的 `google-qr-sms-helper-v1.2.0.zip` 并解压到本地文件夹。
 2. 打开 Chrome / Edge / Brave 浏览器，在地址栏输入 `chrome://extensions/` 并回车。
 3. 打开页面右上角的 **「开发者模式 (Developer mode)」** 开关。
 4. 点击左上角的 **「加载已解压的扩展程序 (Load unpacked)」**，选中刚才解压出来的文件夹即可完成安装。
@@ -71,10 +71,14 @@ git clone https://github.com/havenicec/google-qr-sms-helper.git
 ### Q2: 为什么插件默认伪装成 `iPad Mini` 而不是 `iPad Pro` 或桌面浏览器？
 - **原因**：Google 的 `uplevelingstep/selection` 接口会校验 `User-Agent`：
   - 桌面端（Windows / macOS）以及 Chrome F12 中的 `iPad Pro 13` 发送的都是 `Macintosh; Intel Mac OS X` 桌面级 UA，Google 检测到桌面环境会无视 `idv_xdevice=1` 强行跳回二维码。
-  - 而 `iPad Mini` 发送的是纯移动端 `iPad; CPU OS 16_6 like Mac OS X ... Mobile/15E148` 请求头，且在提交 6 位验证码的 `/_/IdvUplevelingUi/data/batchexecute` 接口上必须保持前后完全一致的 `iPad Mini` 请求头（已在 v1.1.0 中通过 `declarativeNetRequest` 全路径自动覆盖，无需手动开 F12）。
+  - 而 `iPad Mini` 发送的是纯移动端 `iPad; CPU OS 16_6 like Mac OS X ... Mobile/15E148` 请求头，且在提交 6 位验证码的 `/_/IdvUplevelingUi/data/batchexecute` 接口上必须保持前后完全一致的 `iPad Mini` 请求头（自 v1.2.0 起只在降级链路内通过 `declarativeNetRequest` 自动覆盖，无需手动开 F12）。
 
 ### Q3: 点击「一键降级」提示“未能在当前页面识别到二维码”怎么办？
 - 请确认使用的是 **Chrome / Edge 88+** 浏览器（支持原生 `BarcodeDetector` 接口），并等待页面上的黑色二维码图案完全显示后再点击按钮。
+
+### Q4: 点「Verify your phone number」输入号码后又弹回二维码？
+- **原因**：这不是插件生效的链路。Google 新版 `Verify your info to continue` 页面自带手机号验证选项，但如果号码是接码平台 / 虚拟号，或虚拟号已被大量使用，Google 会静默拒绝并回退到二维码，页面上不会给出明确错误。
+- **怎么办**：先点面板上的「恢复桌面环境」并刷新页面，再试一次原生流程；如果仍然循环，说明是号码被风控或账号级设备验证要求，换真实运营商号码或在手机端完成验证后再回桌面继续。
 
 ---
 
