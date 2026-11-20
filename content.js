@@ -11,7 +11,7 @@
   
   const title = document.createElement("div");
   title.style.cssText = "font-weight:600;font-size:14px;display:flex;justify-content:space-between;align-items:center;";
-  title.textContent = "⚡ Google 验证降级助手 v1.1";
+  title.textContent = "⚡ Google 验证降级助手 v1.2";
   panel.appendChild(title);
 
   const statusEl = document.createElement("div");
@@ -21,6 +21,16 @@
   const btn = document.createElement("button");
   btn.style.cssText = "background:#fff;color:#1a73e8;border:none;padding:8px 12px;border-radius:6px;font-weight:600;cursor:pointer;font-size:13px;";
   panel.appendChild(btn);
+
+  const restoreBtn = document.createElement("button");
+  restoreBtn.style.cssText = "background:transparent;color:#e8f0fe;border:1px solid rgba(255,255,255,0.5);padding:6px 10px;border-radius:6px;cursor:pointer;font-size:12px;display:none;";
+  restoreBtn.textContent = "恢复桌面环境";
+  restoreBtn.onclick = async () => {
+    await chrome.runtime.sendMessage({ action: "setSpoof", enabled: false });
+    restoreBtn.style.display = "none";
+    statusEl.textContent = "✅ 已恢复原生环境，请刷新页面后重试验证";
+  };
+  panel.appendChild(restoreBtn);
 
   document.body.appendChild(panel);
 
@@ -49,6 +59,12 @@
     btn.textContent = "⚡ 一键降级到短信选择框";
     btn.onclick = runDowngrade;
   }
+
+  chrome.runtime.sendMessage({ action: "getState" }).then(state => {
+    if (state && state.spoofEnabled) {
+      restoreBtn.style.display = "block";
+    }
+  }).catch(() => {});
 
   async function extractQrUrlFromPage() {
     if ("BarcodeDetector" in window) {
