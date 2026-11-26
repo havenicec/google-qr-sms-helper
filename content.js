@@ -1,5 +1,5 @@
 (() => {
-  // 只在 Cloud Shell 页面或二维码页面挂载面板，进入选择框/验证码输入页后完全不干预页面，防止任何误跳转
+  // 只在 Cloud Shell 页面或二维码页面挂载面板；进入选择框/验证码输入页后完全不干预，防止误跳转
   const isCloudConsole = location.hostname === "console.cloud.google.com";
   const isQrPage = location.pathname.includes("/challenge/iap/qrcode");
   if (!isCloudConsole && !isQrPage) {
@@ -8,10 +8,10 @@
 
   const panel = document.createElement("div");
   panel.style.cssText = "position:fixed;bottom:20px;right:20px;z-index:999999;background:#1a73e8;color:#fff;padding:12px 16px;border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,0.25);font-family:system-ui,sans-serif;font-size:13px;display:flex;flex-direction:column;gap:8px;min-width:240px;max-width:320px;";
-  
+
   const title = document.createElement("div");
   title.style.cssText = "font-weight:600;font-size:14px;display:flex;justify-content:space-between;align-items:center;";
-  title.textContent = "⚡ Google 验证降级助手 v1.1";
+  title.textContent = "⚡ Google 验证降级助手 v1.2";
   panel.appendChild(title);
 
   const statusEl = document.createElement("div");
@@ -72,6 +72,7 @@
         } catch (e) {}
       }
     }
+    // Windows / Linux 的 Chromium 没有 BarcodeDetector，走下面这条正则兜底
     const bodyText = document.body.innerText || "";
     const shortMatch = bodyText.match(/g\.co\/verify\/[A-Za-z0-9_-]+/);
     if (shortMatch) {
@@ -83,19 +84,55 @@
     throw new Error("未能在当前页面识别到二维码，请确认二维码图片已加载");
   }
 
+  // MV3 的 service worker 随时可能被回收，通道关闭时重试一次
+  async function sendToBackground(payload) {
+    try {
+      return await chrome.runtime.sendMessage(payload);
+    } catch (e) {
+      await new Promise(r => setTimeout(r, 400));
+      return await chrome.runtime.sendMessage(payload);
+    }
+  }
+
   async function runDowngrade() {
     try {
       btn.disabled = true;
       btn.textContent = "正在识别二维码...";
-      const qrUrl = await extractQrUrlFromPage();
-      statusEl.textContent = "已提取二维码，正在后台注入 [3,null,4]...";
+      let qrUrl = await extractQrUrlFromPage();
 
-      const res = await chrome.runtime.sendMessage({ action: "downgradeQr", qrUrl });
+      // g.co 短链是跨域的，只能由后台展开；展开后就是 accounts.google.com 同源地址
+      if (!qrUrl.startsWith("https://accounts.google.com/")) {
+        statusEl.textContent = "… 展开 g.co 短链";
+        const resolved = await sendToBackground({ action: "resolveQrUrl", url: qrUrl }).catch(() => null);
+        if (resolved && resolved.ok && resolved.url) {
+          qrUrl = resolved.url;
+        }
+      }
+
+      statusEl.textContent = "已提取二维码，正在注入 [3,null,4]...";
+
+      let res;
+      if (qrUrl.startsWith("https://accounts.google.com/")) {
+        // 首选：在页面里直接跑（同源、带 cookie），完全不依赖 service worker 的消息通道
+        try {
+          res = await QRCore.downgrade(qrUrl, (s) => { statusEl.textContent = "… " + s; });
+        } catch (inlineErr) {
+          try {
+            res = await sendToBackground({ action: "downgradeQr", qrUrl });
+          } catch (bgErr) {
+            throw new Error(inlineErr.message + "；后台兜底也失败：" +
+              ((bgErr && bgErr.message) || String(bgErr)));
+          }
+        }
+      } else {
+        res = await sendToBackground({ action: "downgradeQr", qrUrl });
+      }
+
       if (!res || !res.ok) {
-        throw new Error(res ? res.error : "后台请求失败");
+        throw new Error((res && res.error) || "没有任何返回");
       }
       if (!res.ydResp.includes("[3,null,4]")) {
-        statusEl.textContent = "⚠️ 服务端返回: " + res.ydResp.slice(0, 80);
+        statusEl.textContent = "⚠️ 服务端没给降级状态，返回: " + String(res.ydResp).slice(0, 120);
         btn.disabled = false;
         btn.textContent = "重试一键降级";
         return;
@@ -111,13 +148,13 @@
         cont = cont.replace(/([?&])authuser(&|$)/, "$1authuser=0$2");
         targetUrl = cont + "&idv_xdevice=1";
       } else {
-        // 普通登录入口：去掉 /qrcode，保留并清洗当前参数后追加 &idv_xdevice=1
         targetUrl = location.href.replace("/challenge/iap/qrcode", "/challenge/iap");
         targetUrl = targetUrl.replace(/&idv_xdevice=[^&]*/g, "") + "&idv_xdevice=1";
       }
+      await new Promise(r => setTimeout(r, 600));
       location.replace(targetUrl);
     } catch (e) {
-      statusEl.textContent = "❌ " + e.message;
+      statusEl.textContent = "❌ " + ((e && e.message) || String(e));
       btn.disabled = false;
       btn.textContent = "重试一键降级";
     }
