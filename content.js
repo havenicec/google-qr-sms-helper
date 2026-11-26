@@ -11,7 +11,7 @@
 
   const title = document.createElement("div");
   title.style.cssText = "font-weight:600;font-size:14px;display:flex;justify-content:space-between;align-items:center;";
-  title.textContent = "⚡ Google 验证降级助手 v1.2";
+  title.textContent = "⚡ Google 验证降级助手 v1.2 · Mac 修复版";
   panel.appendChild(title);
 
   const statusEl = document.createElement("div");
@@ -51,37 +51,48 @@
   }
 
   async function extractQrUrlFromPage() {
-    if ("BarcodeDetector" in window) {
-      const detector = new BarcodeDetector({ formats: ["qr_code"] });
-      const mediaEls = Array.from(document.querySelectorAll("img, canvas"));
-      for (const el of mediaEls) {
-        try {
-          if (el.clientWidth > 80 && el.clientHeight > 80) {
+    // 所有平台先读页面中的验证链接，避免 macOS 原生解码分支遮蔽可用的兜底。
+    const pageUrl = QRCore.findQrUrl(document.body.innerText) ||
+      QRCore.findQrUrl(document.documentElement.innerHTML);
+    if (pageUrl) return pageUrl;
+
+    let decodeError = "";
+    if (typeof window.BarcodeDetector === "function") {
+      try {
+        const detector = new BarcodeDetector({ formats: ["qr_code"] });
+        const mediaEls = Array.from(document.querySelectorAll("img, canvas"));
+        for (const el of mediaEls) {
+          try {
+            if (!el.clientWidth || !el.clientHeight) continue;
+            const width = el.naturalWidth || el.width || el.clientWidth;
+            const height = el.naturalHeight || el.height || el.clientHeight;
             const c = document.createElement("canvas");
-            c.width = el.naturalWidth || el.clientWidth || 300;
-            c.height = el.naturalHeight || el.clientHeight || 300;
+            c.width = width;
+            c.height = height;
             const ctx = c.getContext("2d");
+            if (!ctx) continue;
             ctx.fillStyle = "#fff";
             ctx.fillRect(0, 0, c.width, c.height);
             ctx.drawImage(el, 0, 0, c.width, c.height);
             const codes = await detector.detect(c);
-            if (codes && codes.length > 0 && codes[0].rawValue) {
-              return codes[0].rawValue;
+            for (const code of codes || []) {
+              const url = QRCore.normalizeQrUrl(code.rawValue);
+              if (url) return url;
             }
+          } catch (e) {
+            decodeError = (e && e.message) || String(e);
           }
-        } catch (e) {}
+        }
+      } catch (e) {
+        decodeError = (e && e.message) || String(e);
       }
     }
-    // Windows / Linux 的 Chromium 没有 BarcodeDetector，走下面这条正则兜底
-    const bodyText = document.body.innerText || "";
-    const shortMatch = bodyText.match(/g\.co\/verify\/[A-Za-z0-9_-]+/);
-    if (shortMatch) {
-      return "https://" + shortMatch[0];
-    }
-    const html = document.documentElement.innerHTML;
-    const m = html.match(/https:\/\/accounts\.google\.com\/devicephoneverification\/begin\?[^"'\s<>]+/);
-    if (m) return m[0].replace(/\\u003d/g, "=").replace(/\\u0026/g, "&");
-    throw new Error("未能在当前页面识别到二维码，请确认二维码图片已加载");
+    // 解码等待期间页面可能刚好完成渲染，再检查一次文本。
+    const lateUrl = QRCore.findQrUrl(document.body.innerText) ||
+      QRCore.findQrUrl(document.documentElement.innerHTML);
+    if (lateUrl) return lateUrl;
+    throw new Error("未能在当前页面识别到 Google 验证二维码，请确认二维码图片已加载" +
+      (decodeError ? "；原生识别失败：" + decodeError : ""));
   }
 
   // MV3 的 service worker 随时可能被回收，通道关闭时重试一次
@@ -103,9 +114,11 @@
       // g.co 短链是跨域的，只能由后台展开；展开后就是 accounts.google.com 同源地址
       if (!qrUrl.startsWith("https://accounts.google.com/")) {
         statusEl.textContent = "… 展开 g.co 短链";
-        const resolved = await sendToBackground({ action: "resolveQrUrl", url: qrUrl }).catch(() => null);
-        if (resolved && resolved.ok && resolved.url) {
-          qrUrl = resolved.url;
+        const resolved = await sendToBackground({ action: "resolveQrUrl", url: qrUrl });
+        if (!resolved || !resolved.ok) throw new Error((resolved && resolved.error) || "展开短链没有返回");
+        qrUrl = QRCore.normalizeQrUrl(resolved.url);
+        if (!qrUrl || !qrUrl.startsWith("https://accounts.google.com/")) {
+          throw new Error("短链没有跳转到 Google 验证页面");
         }
       }
 
@@ -119,6 +132,7 @@
         } catch (inlineErr) {
           try {
             res = await sendToBackground({ action: "downgradeQr", qrUrl });
+            if (!res || !res.ok) throw new Error((res && res.error) || "后台没有返回");
           } catch (bgErr) {
             throw new Error(inlineErr.message + "；后台兜底也失败：" +
               ((bgErr && bgErr.message) || String(bgErr)));

@@ -8,6 +8,58 @@
 (function (root) {
   const ACCOUNTS = "https://accounts.google.com/";
 
+  function decodeUrlText(text) {
+    return String(text || "")
+      .replace(/\\u([0-9a-f]{4})/gi, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+      .replace(/\\\//g, "/")
+      .replace(/&amp;|&#(?:0*38|x0*26);/gi, "&");
+  }
+
+  function normalizeQrUrl(value) {
+    let text = decodeUrlText(value).trim();
+    if (/^g\.co\//.test(text)) text = "https://" + text;
+    if (/^\/?devicephoneverification\//.test(text)) {
+      text = ACCOUNTS + text.replace(/^\//, "");
+    }
+    try {
+      const url = new URL(text);
+      if (url.protocol !== "https:" || url.username || url.password || url.port) return null;
+      const isShort = url.hostname === "g.co" && /^\/verify\/[A-Za-z0-9_-]+\/?$/.test(url.pathname);
+      const isVerification = url.hostname === "accounts.google.com" &&
+        /^\/devicephoneverification\/(begin|initiate)$/.test(url.pathname) && url.search;
+      return isShort || isVerification ? url.href : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function findQrUrl(text) {
+    const candidates = decodeUrlText(text).match(
+      /https:\/\/accounts\.google\.com\/devicephoneverification\/(?:begin|initiate)\?[^"'\s<>\\]+|(?:https:\/\/)?g\.co\/verify\/[A-Za-z0-9_-]+(?:\?[^"'\s<>\\]+)?|\/?devicephoneverification\/(?:begin|initiate)\?[^"'\s<>\\]+/g
+    ) || [];
+    for (const candidate of candidates) {
+      const url = normalizeQrUrl(candidate);
+      if (url) return url;
+    }
+    return null;
+  }
+
+  // 超时覆盖读取响应正文，避免面板永久停在某个阶段；错误里不暴露验证链接的参数。
+  async function fetchText(url, options, label) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 20000);
+    try {
+      const response = await fetch(url, { ...options, signal: controller.signal });
+      if (!response.ok) throw new Error("HTTP " + response.status);
+      return { text: await response.text(), url: response.url };
+    } catch (e) {
+      const reason = controller.signal.aborted ? "请求超时（20 秒）" : ((e && e.message) || String(e));
+      throw new Error(label + "：" + reason);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   // 从验证页 HTML 里抠出 batchexecute 需要的三个参数；缺失时把缺了哪些一并报出来
   function extractTokens(html) {
     const at = html.match(/"SNlM0e":"([^"]+)"/);
@@ -38,7 +90,7 @@
     };
 
     stage("读取验证页");
-    const html = await (await fetch(qrUrl, { credentials: "include" })).text();
+    const { text: html } = await fetchText(qrUrl, { credentials: "include" }, "读取验证页");
 
     stage("解析 SNlM0e / Qzxixc / TL");
     const t = extractTokens(html);
@@ -60,13 +112,13 @@
         "f.req": JSON.stringify([[[rpcid, JSON.stringify(payload), null, "generic"]]]),
         "at": t.at
       });
-      const resp = await fetch(url, {
+      const { text } = await fetchText(url, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
         body: body.toString()
-      });
-      return await resp.text();
+      }, "RPC " + rpcid);
+      return text;
     };
 
     // SelectNextVerificationMethod -> consent
@@ -81,7 +133,7 @@
     const consentUrl = ACCOUNTS +
       "devicephoneverification/consent?flow=browser&plt&dsh=" +
       encodeURIComponent(t.dsh) + "&hl=en&tl=" + encodeURIComponent(t.tl);
-    const consentHtml = await (await fetch(consentUrl, { credentials: "include" })).text();
+    const { text: consentHtml } = await fetchText(consentUrl, { credentials: "include" }, "读取 consent 页面");
     const uuid = consentHtml.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/);
     if (!uuid) {
       throw new Error("consent 页面里没有 UUID（页面长度 " + consentHtml.length + "）");
@@ -98,5 +150,5 @@
     return { ok: true, rid: uuid[0], ydResp };
   }
 
-  root.QRCore = { extractTokens, downgrade };
+  root.QRCore = { extractTokens, downgrade, normalizeQrUrl, findQrUrl, fetchText };
 })(typeof self !== "undefined" ? self : globalThis);

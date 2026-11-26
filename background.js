@@ -67,16 +67,15 @@ let busy = false;
 
 // 把 g.co/verify/* 短链展开成 devicephoneverification/begin 地址（跨域，只能在这里做）
 async function resolveQrUrl(url) {
-  const shortResp = await fetch(url, { credentials: "include" });
-  const shortHtml = await shortResp.text();
-  const m = shortHtml.match(/devicephoneverification\/begin\?[^"'\s<>]+/);
-  if (!m) {
-    throw new Error("g.co 短链里没有 devicephoneverification/begin 地址");
-  }
-  return "https://accounts.google.com/" + m[0]
-    .replace(/\\u003d/g, "=")
-    .replace(/\\u0026/g, "&")
-    .replace(/&quot;.*$/, "");
+  const shortUrl = QRCore.normalizeQrUrl(url);
+  if (!shortUrl || new URL(shortUrl).hostname !== "g.co") throw new Error("不是有效的 g.co 验证短链");
+  const response = await QRCore.fetchText(shortUrl, { credentials: "include" }, "展开 g.co 短链");
+  // fetch 会自动跟随重定向，最终页面不一定还包含 begin 链接。
+  const finalUrl = QRCore.normalizeQrUrl(response.url);
+  if (finalUrl && finalUrl.startsWith("https://accounts.google.com/")) return finalUrl;
+  const pageUrl = QRCore.findQrUrl(response.text);
+  if (pageUrl && pageUrl.startsWith("https://accounts.google.com/")) return pageUrl;
+  throw new Error("g.co 短链没有返回 Google 验证地址，请刷新二维码后重试");
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
