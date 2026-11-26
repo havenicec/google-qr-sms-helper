@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Google QR 自动降级短信助手",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "自动识别 Google 验证二维码、注入 [3,null,4] 降级状态，并在全链路 (含 batchexecute 提交验证码接口) 保持 iPad Mini 环境",
   "permissions": [
     "declarativeNetRequest",
@@ -31,7 +31,7 @@
         "https://accounts.google.com/*",
         "https://console.cloud.google.com/*"
       ],
-      "js": ["content.js"],
+      "js": ["qr-core.js", "content.js"],
       "run_at": "document_idle"
     }
   ]
