@@ -74,7 +74,13 @@ git clone https://github.com/havenicec/google-qr-sms-helper.git
   - 而 `iPad Mini` 发送的是纯移动端 `iPad; CPU OS 16_6 like Mac OS X ... Mobile/15E148` 请求头，且在提交 6 位验证码的 `/_/IdvUplevelingUi/data/batchexecute` 接口上必须保持前后完全一致的 `iPad Mini` 请求头（已在 v1.1.0 中通过 `declarativeNetRequest` 全路径自动覆盖，无需手动开 F12）。
 
 ### Q3: 点击「一键降级」提示“未能在当前页面识别到二维码”怎么办？
-- 请确认使用的是 **Chrome / Edge 88+** 浏览器（支持原生 `BarcodeDetector` 接口），并等待页面上的黑色二维码图案完全显示后再点击按钮。
+- 请等待页面上的黑色二维码图案完全显示后再点击按钮。
+- **Windows / Linux 版 Chromium 并未实现原生 `BarcodeDetector`**（目前只有 ChromeOS / Android / macOS 支持），所以在这两个平台上插件从来不会走 `BarcodeDetector` 分支，而是靠「从页面文本与 HTML 里正则提取二维码链接」的兜底路径工作。若仍提示识别失败，请按 F5 刷新页面，确认二维码已经渲染完成再点。
+
+### Q4: 点击后只提示 `A listener indicated an asynchronous response by returning true, but the message channel closed before a response was received` 怎么办？
+- **原因**：v1.1.0 把「读验证页取参数」和三次 `batchexecute` RPC 全部放在 service worker 里跑。MV3 的 Service Worker 随时可能被浏览器回收/重启，消息通道一关，面板就只能拿到这条什么信息都没有的空错误。
+- **v1.2.0 起**：降级流程改为**在二维码页面内直接执行**（同源 `fetch`，自动带 cookie），不再依赖消息通道；后台只保留 `g.co` 短链展开这一件跨域的事，以及页内执行失败时的兜底。失败时面板会直接显示卡在哪一步（`读取验证页` / `解析 SNlM0e / Qzxixc / TL` / `RPC MypxBd` / `取 consent 里的 UUID` / `RPC YDtwf`），并带上页面长度和缺失的参数名，方便判断是「页面没加载完」还是「Google 改了字段名」。
+
 
 ---
 
@@ -110,8 +116,9 @@ google-qr-sms-helper/
 ├── assets/
 │   └── cloud-shell-verify.png  # Cloud Shell Verify 入口示意图
 ├── manifest.json               # Chrome Extension Manifest V3 配置文件
-├── background.js               # DNR 全路径 iPad Mini 请求头伪装 + [3,null,4] RPC 注入
-├── content.js                  # 悬浮控制面板 + BarcodeDetector 二维码识别 + URL 清洗跳转
+├── qr-core.js                  # 降级核心逻辑（content script 与 service worker 共用）
+├── background.js               # DNR 全路径 iPad Mini 请求头伪装 + g.co 短链展开 + 兜底执行
+├── content.js                  # 悬浮控制面板 + 二维码识别 + 页内直接执行降级 + URL 清洗跳转
 ├── ua_spoof.js                 # Main-world navigator 属性对齐
 ├── LICENSE                     # MIT 开源协议
 └── README.md                   # 项目说明与图文教程

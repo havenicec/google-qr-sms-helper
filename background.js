@@ -1,8 +1,10 @@
+importScripts("qr-core.js");
+
 const IPAD_MINI_UA = "Mozilla/5.0 (iPad; CPU OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1";
 const IPHONE_UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1";
 
 function setupRules() {
-  chrome.declarativeNetRequest.updateDynamicRules({
+  return chrome.declarativeNetRequest.updateDynamicRules({
     removeRuleIds: [1, 2],
     addRules: [
       {
@@ -25,7 +27,6 @@ function setupRules() {
         },
         condition: {
           urlFilter: "||accounts.google.com/*",
-          excludedRequestDomains: [],
           resourceTypes: ["main_frame", "sub_frame", "xmlhttprequest", "other"]
         }
       },
@@ -51,81 +52,62 @@ function setupRules() {
         }
       }
     ]
+  }).catch((e) => {
+    // UA 伪装修正是整个流程的前提，失败必须打出来，不能像以前那样静默
+    console.error("[qr-helper] 注入请求头规则失败，UA 伪装可能不生效：", e);
   });
 }
 
-chrome.runtime.onInstalled.addListener(setupRules);
-chrome.runtime.onStartup.addListener(setupRules);
+chrome.runtime.onInstalled.addListener(() => setupRules());
+chrome.runtime.onStartup.addListener(() => setupRules());
 setupRules();
 
+let STAGE = "init";
+let busy = false;
+
+// 把 g.co/verify/* 短链展开成 devicephoneverification/begin 地址（跨域，只能在这里做）
+async function resolveQrUrl(url) {
+  const shortResp = await fetch(url, { credentials: "include" });
+  const shortHtml = await shortResp.text();
+  const m = shortHtml.match(/devicephoneverification\/begin\?[^"'\s<>]+/);
+  if (!m) {
+    throw new Error("g.co 短链里没有 devicephoneverification/begin 地址");
+  }
+  return "https://accounts.google.com/" + m[0]
+    .replace(/\\u003d/g, "=")
+    .replace(/\\u0026/g, "&")
+    .replace(/&quot;.*$/, "");
+}
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (!msg) return;
+
+  if (msg.action === "resolveQrUrl") {
+    resolveQrUrl(msg.url)
+      .then((url) => sendResponse({ ok: true, url }))
+      .catch((e) => sendResponse({ ok: false, error: (e && e.message) || String(e) }));
+    return true;
+  }
+
   if (msg.action === "downgradeQr") {
-    handleDowngrade(msg.qrUrl).then(sendResponse).catch(err => {
-      sendResponse({ ok: false, error: String(err) });
-    });
+    if (busy) {
+      sendResponse({ ok: false, error: "上一次降级请求还在进行中，请稍等几秒再点", stage: STAGE });
+      return;
+    }
+    busy = true;
+    (async () => {
+      try {
+        let url = msg.qrUrl;
+        if (!url.startsWith("https://accounts.google.com/")) {
+          url = await resolveQrUrl(url);
+        }
+        sendResponse(await QRCore.downgrade(url, (s) => { STAGE = s; }));
+      } catch (e) {
+        sendResponse({ ok: false, error: (e && e.message) || String(e), stage: STAGE });
+      } finally {
+        busy = false;
+      }
+    })();
     return true;
   }
 });
-
-async function handleDowngrade(qrUrl) {
-  let targetUrl = qrUrl;
-  if (targetUrl.includes("g.co/verify/")) {
-    const shortResp = await fetch(targetUrl, { credentials: "include" });
-    const shortHtml = await shortResp.text();
-    const m = shortHtml.match(/devicephoneverification\/begin\?[^"'\s<>]+/);
-    if (m) {
-      targetUrl = "https://accounts.google.com/" + m[0]
-        .replace(/\\u003d/g, "=")
-        .replace(/\\u0026/g, "&")
-        .replace(/&quot;.*$/, "");
-    }
-  }
-
-  const initResp = await fetch(targetUrl, { credentials: "include" });
-  const html = await initResp.text();
-
-  const atMatch = html.match(/"SNlM0e":"([^"]+)"/);
-  const dshMatch = html.match(/"Qzxixc":"([^"]+)"/);
-  let tl = "";
-  const ds0Match = html.match(/key:\s*['"]ds:0['"][^\}]*data:\["([^"]+)"\]/);
-  if (ds0Match) {
-    tl = ds0Match[1];
-  } else {
-    const tlMatch = html.match(/ADG-[A-Za-z0-9_-]+/);
-    if (tlMatch) tl = tlMatch[0];
-  }
-  if (!atMatch || !dshMatch || !tl) {
-    throw new Error("未能从二维码页面提取出 SNlM0e / Qzxixc / TL 参数");
-  }
-  const at = atMatch[1];
-  const dsh = dshMatch[1];
-
-  async function callRpc(rpcid, payload, sourcePath) {
-    const url = `https://accounts.google.com/devicephoneverification/_/DevicePhoneVerificationUi/data/batchexecute?rpcids=${rpcid}&source-path=${sourcePath}&hl=en&tl=${encodeURIComponent(tl)}&rt=c`;
-    const body = new URLSearchParams({
-      "f.req": JSON.stringify([[[rpcid, JSON.stringify(payload), null, "generic"]]]),
-      "at": at
-    });
-    const r = await fetch(url, {
-      method: "POST",
-      credentials: "include",
-      headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
-      body: body.toString()
-    });
-    return await r.text();
-  }
-
-  await callRpc("MypxBd", [tl, dsh, false, null, null, false, null, null, "browser"], "%2Fdevicephoneverification%2Finitiate");
-
-  const consentUrl = `https://accounts.google.com/devicephoneverification/consent?flow=browser&plt&dsh=${encodeURIComponent(dsh)}&hl=en&tl=${encodeURIComponent(tl)}`;
-  const consentResp = await fetch(consentUrl, { credentials: "include" });
-  const consentHtml = await consentResp.text();
-  const uuidMatch = consentHtml.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/);
-  if (!uuidMatch) {
-    throw new Error("未能从 consent 页面提取到 UUID");
-  }
-  const rid = uuidMatch[0];
-
-  const ydResp = await callRpc("YDtwf", [null, rid, dsh, 7, null, tl, false], "%2Fdevicephoneverification%2Fmodacintro");
-  return { ok: true, rid, ydResp };
-}
